@@ -38,6 +38,7 @@ TODO:
 #define PAGE_SIZE 512
 #define TOTAL_PAGES 2520
 #define DELIM "<<PAGE BREAK>>"  
+#define FULL_REFRESH_INTERVAL 10
 
 typedef enum {
   SLEEP = 0,
@@ -55,6 +56,7 @@ uint8_t chapter_number = 1;
 char page_buffer[PAGE_SIZE];
 File book;
 STATE state = SLEEP;
+uint8_t pages_since_full_refresh = 0;
 
 const char book_text[] = R"123456789(
 Three Rings for the Elven-kings under the sky,
@@ -23877,14 +23879,24 @@ void readPage(uint32_t offset) {
 }
 
 
-/* Display page stored in page_buffer on the display. */
-void drawPage()
+/* Display page stored in page_buffer on the display.
+ * Use partial refreshes between periodic full refreshes to reduce page turn time.
+ */
+void drawPage(bool forceFullRefresh = false)
 {
+  bool useFullRefresh = forceFullRefresh || (pages_since_full_refresh >= FULL_REFRESH_INTERVAL);
+
   display.setFont(NULL);
   display.setTextSize(1);
   display.setTextColor(GxEPD_BLACK);
   display.setRotation(1);
-  display.setFullWindow();
+
+  if (useFullRefresh) {
+    display.setFullWindow();
+  } else {
+    display.setPartialWindow(0, 0, display.width(), display.height());
+  }
+
   display.firstPage();
 
   const int lineHeight = 10;
@@ -23918,11 +23930,18 @@ void drawPage()
     }
 
   } while (display.nextPage());
+
+  if (useFullRefresh) {
+    pages_since_full_refresh = 0;
+  } else {
+    pages_since_full_refresh++;
+  }
 }
 
 
 void drawStartupImage()
 {
+  pages_since_full_refresh = 0;
   display.setRotation(1);        // adjust if needed
   display.setFullWindow();
   display.firstPage();
@@ -24020,7 +24039,7 @@ void loop() {
         }
 
         readEmbeddedPage(cur_page);
-        drawPage();
+        drawPage(true);
         state = READING; // transition to reading state
         delay(800);
       }
