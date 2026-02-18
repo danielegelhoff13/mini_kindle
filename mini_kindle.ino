@@ -2,7 +2,6 @@
 /**
 TODO: 
   * Implement menu functionality (chapter selection, progress bar, etc.)
-  * Implement page stack --> back twice will break
 
 */
 
@@ -39,6 +38,7 @@ TODO:
 #define TOTAL_PAGES 2520
 #define DELIM "<<PAGE BREAK>>"  
 #define FULL_REFRESH_INTERVAL 10
+#define BACK_PAGE_STACK_SIZE 20
 
 typedef enum {
   SLEEP = 0,
@@ -57,6 +57,32 @@ char page_buffer[PAGE_SIZE];
 File book;
 STATE state = SLEEP;
 uint8_t pages_since_full_refresh = 0;
+uint32_t back_page_stack[BACK_PAGE_STACK_SIZE];
+uint8_t back_page_count = 0;
+
+void pushBackPageOffset(uint32_t offset)
+{
+  if (back_page_count < BACK_PAGE_STACK_SIZE) {
+    back_page_stack[back_page_count++] = offset;
+    return;
+  }
+
+  for (uint8_t i = 1; i < BACK_PAGE_STACK_SIZE; i++) {
+    back_page_stack[i - 1] = back_page_stack[i];
+  }
+  back_page_stack[BACK_PAGE_STACK_SIZE - 1] = offset;
+}
+
+bool popBackPageOffset(uint32_t* offset)
+{
+  if (back_page_count == 0) {
+    return false;
+  }
+
+  back_page_count--;
+  *offset = back_page_stack[back_page_count];
+  return true;
+}
 
 const char book_text[] = R"123456789(
 Three Rings for the Elven-kings under the sky,
@@ -24025,6 +24051,7 @@ void setup() {
   prev_page = 0;
   cur_page = loadPageState(&cur_page);
   next_page = 0;
+  back_page_count = 0;
 
 }
 
@@ -24038,6 +24065,7 @@ void loop() {
           Serial.println("load page state faile");
         }
 
+        back_page_count = 0;
         readEmbeddedPage(cur_page);
         drawPage(true);
         state = READING; // transition to reading state
@@ -24049,14 +24077,20 @@ void loop() {
     case READING:
       if (digitalRead(PAGE_FORWARD_PIN) == LOW) {
 
+        pushBackPageOffset(cur_page);
         readEmbeddedPage(next_page);
         drawPage();
         delay(800);
       } 
       
       else if (digitalRead(PAGE_BACK_PIN) == LOW) { 
-        readEmbeddedPage(prev_page);
-        drawPage();
+        uint32_t back_page_offset;
+        if (popBackPageOffset(&back_page_offset)) {
+          readEmbeddedPage(back_page_offset);
+          drawPage();
+        } else {
+          Serial.println("no previous page in back stack");
+        }
         delay(800);
       } 
       
