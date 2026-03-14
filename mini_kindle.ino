@@ -42,6 +42,7 @@ rp2040 package's SD library, not the installed Arduino SD library */
 #define FULL_REFRESH_INTERVAL 10
 #define BACK_PAGE_STACK_SIZE 20
 #define MAX_CHAPTERS 64
+#define FRONT_MATTER_MENU_PAGES 3
 #define FLASH_STATE_MAGIC 0x4D4B5354UL // "MKST"
 #define FLASH_STATE_VERSION 1
 
@@ -183,6 +184,39 @@ void indexEmbeddedChapters()
 
   chapter_count = 0;
 
+  for (uint8_t i = 0; i < FRONT_MATTER_MENU_PAGES && chapter_count < MAX_CHAPTERS; i++) {
+    chapter_page_offsets[chapter_count++] = scan_offset;
+
+    size_t text_index = 0;
+    size_t match = 0;
+
+    while (book_text[scan_offset + text_index] != '\0') {
+      char c = book_text[scan_offset + text_index];
+
+      if (c == DELIM[match]) {
+        match++;
+        text_index++;
+        if (DELIM[match] == '\0') {
+          break;
+        }
+        continue;
+      }
+
+      if (match > 0) {
+        match = 0;
+      }
+
+      text_index++;
+    }
+
+    if (text_index == 0 || book_text[scan_offset + text_index] == '\0') {
+      scan_offset += text_index;
+      break;
+    }
+
+    scan_offset += text_index;
+  }
+
   while (scan_offset < full_text_len && chapter_count < MAX_CHAPTERS) {
     char temp_page[PAGE_SIZE];
     size_t buffer_index = 0;
@@ -217,7 +251,17 @@ void indexEmbeddedChapters()
     temp_page[buffer_index] = '\0';
 
     if (isChapterTitlePage(temp_page)) {
-      chapter_page_offsets[chapter_count++] = scan_offset;
+      bool already_indexed = false;
+      for (uint8_t i = 0; i < chapter_count; i++) {
+        if (chapter_page_offsets[i] == scan_offset) {
+          already_indexed = true;
+          break;
+        }
+      }
+
+      if (!already_indexed) {
+        chapter_page_offsets[chapter_count++] = scan_offset;
+      }
     }
 
     if (text_index == 0) {
