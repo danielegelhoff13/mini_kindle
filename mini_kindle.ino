@@ -42,7 +42,6 @@ rp2040 package's SD library, not the installed Arduino SD library */
 #define FULL_REFRESH_INTERVAL 10
 #define BACK_PAGE_STACK_SIZE 20
 #define MAX_CHAPTERS 64
-#define MAX_CHAPTERS 64
 #define FLASH_STATE_MAGIC 0x4D4B5354UL // "MKST"
 #define FLASH_STATE_VERSION 1
 
@@ -82,6 +81,9 @@ uint8_t chapter_count = 0;
 uint8_t current_chapter_index = 0;
 uint8_t chapter_menu_index = 0;
 
+// Forward declaration for embedded text used by chapter indexing helpers.
+extern const char book_text[];
+
 bool isWhitespaceChar(char c)
 {
   return c == ' ' || c == '\n' || c == '\r' || c == '\t';
@@ -89,20 +91,33 @@ bool isWhitespaceChar(char c)
 
 bool isChapterTitlePage(const char* page)
 {
-  bool hasChapterWord = false;
+  bool hasChapterHeading = false;
   uint8_t non_empty_line_count = 0;
   bool in_line_text = false;
+  size_t line_start = 0;
 
   for (size_t i = 0; page[i] != '\0'; i++) {
-    if (!hasChapterWord && strncmp(&page[i], "Chapter", 7) == 0) {
-      hasChapterWord = true;
-    }
-
     if (page[i] == '\n') {
+      if (!hasChapterHeading) {
+        size_t line_end = i;
+        while (line_start < line_end && isWhitespaceChar(page[line_start])) {
+          line_start++;
+        }
+
+        const size_t chapter_len = 7;
+        if (line_end >= line_start + chapter_len && strncmp(&page[line_start], "Chapter", chapter_len) == 0) {
+          size_t chapter_tail = line_start + chapter_len;
+          if (chapter_tail < line_end && page[chapter_tail] == ' ') {
+            hasChapterHeading = true;
+          }
+        }
+      }
+
       if (in_line_text) {
         non_empty_line_count++;
         in_line_text = false;
       }
+      line_start = i + 1;
       continue;
     }
 
@@ -115,7 +130,26 @@ bool isChapterTitlePage(const char* page)
     non_empty_line_count++;
   }
 
-  return hasChapterWord && non_empty_line_count <= 3;
+  if (!hasChapterHeading && page[line_start] != '\0') {
+    size_t line_end = line_start;
+    while (page[line_end] != '\0' && page[line_end] != '\n') {
+      line_end++;
+    }
+
+    while (line_start < line_end && isWhitespaceChar(page[line_start])) {
+      line_start++;
+    }
+
+    const size_t chapter_len = 7;
+    if (line_end >= line_start + chapter_len && strncmp(&page[line_start], "Chapter", chapter_len) == 0) {
+      size_t chapter_tail = line_start + chapter_len;
+      if (chapter_tail < line_end && page[chapter_tail] == ' ') {
+        hasChapterHeading = true;
+      }
+    }
+  }
+
+  return hasChapterHeading && non_empty_line_count <= 3;
 }
 
 void updateCurrentChapterForOffset(uint32_t offset)
@@ -24306,7 +24340,9 @@ void loop() {
         drawStartupImage();
         Serial.print("saving current offset: ");
         Serial.println(cur_page);
-        savePageState(cur_page);
+        if (!savePageStateToFlash()) {
+          Serial.println("failed to save state to flash");
+        }
         state = SLEEP;
       }
       break;
