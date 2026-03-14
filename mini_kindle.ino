@@ -8,7 +8,8 @@ TODO:
 #include <GxEPD2_BW.h>
 #include "GxEPD2_display_selection_new_style.h"
 #include <pgmspace.h>
-
+/* SD functionality might not be working because ArduinoIDE uses 
+rp2040 package's SD library, not the installed Arduino SD library */
 #include <SD.h>
 #include <EEPROM.h>
 
@@ -24074,10 +24075,8 @@ void setup() {
     Serial.println(book.size());
   }
 
-  if (!EEPROM.begin(FLASH_STATE_SIZE)) {
-    Serial.println("flash state init failed");
-  }
-
+  EEPROM.begin(FLASH_STATE_SIZE);
+    
   /* Init display, display startup image */
   Serial.println("Starting display init...");
   display.init(115200, true, 2, false);
@@ -24102,7 +24101,7 @@ void loop() {
       if (digitalRead(SLEEP_PIN) == LOW) {
 
         if (!loadPageStateFromFlash(&cur_page)) {
-          Serial.println("load page state faile");
+          Serial.println("load page state failed");
         }
         readEmbeddedPage(cur_page);
         drawPage(true);
