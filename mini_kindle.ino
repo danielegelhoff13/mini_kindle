@@ -41,6 +41,8 @@ rp2040 package's SD library, not the installed Arduino SD library */
 #define DELIM "<<PAGE BREAK>>"  
 #define FULL_REFRESH_INTERVAL 10
 #define BACK_PAGE_STACK_SIZE 20
+#define MAX_CHAPTERS 64
+#define MAX_CHAPTERS 64
 #define FLASH_STATE_MAGIC 0x4D4B5354UL // "MKST"
 #define FLASH_STATE_VERSION 1
 
@@ -75,6 +77,123 @@ STATE state = SLEEP;
 uint8_t pages_since_full_refresh = 0;
 uint32_t back_page_stack[BACK_PAGE_STACK_SIZE];
 uint8_t back_page_count = 0;
+uint32_t chapter_page_offsets[MAX_CHAPTERS];
+uint8_t chapter_count = 0;
+uint8_t current_chapter_index = 0;
+uint8_t chapter_menu_index = 0;
+
+bool isWhitespaceChar(char c)
+{
+  return c == ' ' || c == '\n' || c == '\r' || c == '\t';
+}
+
+bool isChapterTitlePage(const char* page)
+{
+  bool hasChapterWord = false;
+  uint8_t non_empty_line_count = 0;
+  bool in_line_text = false;
+
+  for (size_t i = 0; page[i] != '\0'; i++) {
+    if (!hasChapterWord && strncmp(&page[i], "Chapter", 7) == 0) {
+      hasChapterWord = true;
+    }
+
+    if (page[i] == '\n') {
+      if (in_line_text) {
+        non_empty_line_count++;
+        in_line_text = false;
+      }
+      continue;
+    }
+
+    if (!isWhitespaceChar(page[i])) {
+      in_line_text = true;
+    }
+  }
+
+  if (in_line_text) {
+    non_empty_line_count++;
+  }
+
+  return hasChapterWord && non_empty_line_count <= 3;
+}
+
+void updateCurrentChapterForOffset(uint32_t offset)
+{
+  if (chapter_count == 0) {
+    chapter_number = 1;
+    current_chapter_index = 0;
+    return;
+  }
+
+  uint8_t chapter_index = 0;
+  for (uint8_t i = 0; i < chapter_count; i++) {
+    if (chapter_page_offsets[i] <= offset) {
+      chapter_index = i;
+    } else {
+      break;
+    }
+  }
+
+  current_chapter_index = chapter_index;
+  chapter_number = chapter_index + 1;
+}
+
+void indexEmbeddedChapters()
+{
+  uint32_t scan_offset = 0;
+  size_t full_text_len = strlen(book_text);
+
+  chapter_count = 0;
+
+  while (scan_offset < full_text_len && chapter_count < MAX_CHAPTERS) {
+    char temp_page[PAGE_SIZE];
+    size_t buffer_index = 0;
+    size_t text_index = 0;
+    size_t match = 0;
+
+    while (book_text[scan_offset + text_index] != '\0' && buffer_index < PAGE_SIZE - 1) {
+      char c = book_text[scan_offset + text_index];
+
+      if (c == DELIM[match]) {
+        match++;
+        text_index++;
+        if (DELIM[match] == '\0') {
+          break;
+        }
+        continue;
+      }
+
+      if (match > 0) {
+        for (size_t i = 0; i < match; i++) {
+          if (buffer_index < PAGE_SIZE - 1) {
+            temp_page[buffer_index++] = DELIM[i];
+          }
+        }
+        match = 0;
+      }
+
+      temp_page[buffer_index++] = c;
+      text_index++;
+    }
+
+    temp_page[buffer_index] = '\0';
+
+    if (isChapterTitlePage(temp_page)) {
+      chapter_page_offsets[chapter_count++] = scan_offset;
+    }
+
+    if (text_index == 0) {
+      break;
+    }
+
+    scan_offset += text_index;
+  }
+
+  if (chapter_count == 0) {
+    chapter_page_offsets[chapter_count++] = 0;
+  }
+}
 
 void pushBackPageOffset(uint32_t offset)
 {
@@ -23875,6 +23994,7 @@ void readEmbeddedPage(uint32_t offset) {
     prev_page = cur_page;
     cur_page = offset;
     next_page = offset + text_index;   // advance past delimiter
+    updateCurrentChapterForOffset(cur_page);
 }
 
 
@@ -23918,6 +24038,7 @@ void readPage(uint32_t offset) {
     prev_page = cur_page;
     cur_page = offset;
     next_page = book.position();
+    updateCurrentChapterForOffset(cur_page);
 }
 
 
@@ -24091,6 +24212,8 @@ void setup() {
   if (!loadPageStateFromFlash(&cur_page)) {
     Serial.println("no flash page state found, using defaults");
   }
+  indexEmbeddedChapters();
+  updateCurrentChapterForOffset(cur_page);
 
 }
 
@@ -24132,7 +24255,12 @@ void loop() {
       } 
       
       else if (digitalRead(MENU_PIN) == LOW) {
+        chapter_menu_index = current_chapter_index;
+        back_page_count = 0;
+        readEmbeddedPage(chapter_page_offsets[chapter_menu_index]);
+        drawPage(true);
         state = MENU;
+        delay(800);
       } 
       
       else if (digitalRead(SLEEP_PIN) == LOW) {
@@ -24150,7 +24278,37 @@ void loop() {
 
 
     case MENU:
-      // TODO implement menu functionality
+      if (digitalRead(PAGE_FORWARD_PIN) == LOW) {
+        if (chapter_menu_index + 1 < chapter_count) {
+          chapter_menu_index++;
+          readEmbeddedPage(chapter_page_offsets[chapter_menu_index]);
+          drawPage(true);
+        }
+        delay(800);
+      }
+
+      else if (digitalRead(PAGE_BACK_PIN) == LOW) {
+        if (chapter_menu_index > 0) {
+          chapter_menu_index--;
+          readEmbeddedPage(chapter_page_offsets[chapter_menu_index]);
+          drawPage(true);
+        }
+        delay(800);
+      }
+
+      else if (digitalRead(MENU_PIN) == LOW) {
+        state = READING;
+        delay(800);
+      }
+
+      else if (digitalRead(SLEEP_PIN) == LOW) {
+        Serial.println("sleep state, trying to print startup image");
+        drawStartupImage();
+        Serial.print("saving current offset: ");
+        Serial.println(cur_page);
+        savePageState(cur_page);
+        state = SLEEP;
+      }
       break;
   }
   
