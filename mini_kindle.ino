@@ -10,6 +10,7 @@ TODO:
 #include <pgmspace.h>
 
 #include <SD.h>
+#include <EEPROM.h>
 
 /**
   * Pin assignments
@@ -39,6 +40,20 @@ TODO:
 #define DELIM "<<PAGE BREAK>>"  
 #define FULL_REFRESH_INTERVAL 10
 #define BACK_PAGE_STACK_SIZE 20
+#define FLASH_STATE_MAGIC 0x4D4B5354UL // "MKST"
+#define FLASH_STATE_VERSION 1
+
+typedef struct __attribute__((packed)) {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t back_page_count;
+  uint16_t reserved;
+  uint32_t cur_page;
+  uint32_t back_page_stack[BACK_PAGE_STACK_SIZE];
+} PersistedPageState;
+
+const int FLASH_STATE_ADDR = 0;
+const int FLASH_STATE_SIZE = sizeof(PersistedPageState);
 
 typedef enum {
   SLEEP = 0,
@@ -23983,33 +23998,51 @@ void drawStartupImage()
   } while (display.nextPage());
 }
 
-bool savePageState(uint32_t cur_page)
+bool savePageStateToFlash()
 {
-    File f = SD.open("/state.bin", FILE_WRITE);
-    if (!f) return false;
+    PersistedPageState persisted = {};
+    persisted.magic = FLASH_STATE_MAGIC;
+    persisted.version = FLASH_STATE_VERSION;
+    persisted.back_page_count = back_page_count;
+    persisted.cur_page = cur_page;
 
-    f.seek(0);                     // overwrite existing
-    f.write((uint8_t*)&cur_page, sizeof(cur_page));
-    f.close();
+    for (uint8_t i = 0; i < back_page_count && i < BACK_PAGE_STACK_SIZE; i++) {
+      persisted.back_page_stack[i] = back_page_stack[i];
+    }
+
+    EEPROM.put(FLASH_STATE_ADDR, persisted);
+    #if defined(ARDUINO_ARCH_RP2040) || defined(ESP8266) || defined(ESP32)
+      if (!EEPROM.commit()) {
+        return false;
+      }
+    #endif
 
     return true;
 }
 
-bool loadPageState(uint32_t* cur_page)
+bool loadPageStateFromFlash(uint32_t* loaded_cur_page)
 {
-    File f = SD.open("/state.bin", FILE_READ);
-    if (!f) return false;
+    PersistedPageState persisted = {};
+    EEPROM.get(FLASH_STATE_ADDR, persisted);
 
-    if (f.size() != sizeof(uint32_t)) {
-        f.close();
+    if (persisted.magic != FLASH_STATE_MAGIC || persisted.version != FLASH_STATE_VERSION) {
         return false;
     }
 
-    f.read((uint8_t*)cur_page, sizeof(uint32_t));
-    f.close();
+    if (persisted.back_page_count > BACK_PAGE_STACK_SIZE) {
+      return false;
+    }
+
+    *loaded_cur_page = persisted.cur_page;
+    back_page_count = persisted.back_page_count;
+    for (uint8_t i = 0; i < back_page_count; i++) {
+      back_page_stack[i] = persisted.back_page_stack[i];
+    }
 
     Serial.print("loaded current offset: ");
-    Serial.println(*cur_page);
+    Serial.println(*loaded_cur_page);
+    Serial.print("loaded back stack count: ");
+    Serial.println(back_page_count);
 
     return true;
 }
@@ -24041,6 +24074,10 @@ void setup() {
     Serial.println(book.size());
   }
 
+  if (!EEPROM.begin(FLASH_STATE_SIZE)) {
+    Serial.println("flash state init failed");
+  }
+
   /* Init display, display startup image */
   Serial.println("Starting display init...");
   display.init(115200, true, 2, false);
@@ -24049,9 +24086,12 @@ void setup() {
 
   /* Init page state. */
   prev_page = 0;
-  cur_page = loadPageState(&cur_page);
+  cur_page = 0;
   next_page = 0;
   back_page_count = 0;
+  if (!loadPageStateFromFlash(&cur_page)) {
+    Serial.println("no flash page state found, using defaults");
+  }
 
 }
 
@@ -24061,11 +24101,9 @@ void loop() {
     case SLEEP:
       if (digitalRead(SLEEP_PIN) == LOW) {
 
-        if (!loadPageState(&cur_page)) {
+        if (!loadPageStateFromFlash(&cur_page)) {
           Serial.println("load page state faile");
         }
-
-        back_page_count = 0;
         readEmbeddedPage(cur_page);
         drawPage(true);
         state = READING; // transition to reading state
@@ -24103,7 +24141,9 @@ void loop() {
         drawStartupImage();
         Serial.print("saving current offset: ");
         Serial.println(cur_page);
-        savePageState(cur_page);
+        if (!savePageStateToFlash()) {
+          Serial.println("failed to save state to flash");
+        }
         state = SLEEP;
         // hibernate?
       }
