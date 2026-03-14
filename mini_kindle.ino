@@ -42,6 +42,7 @@ rp2040 package's SD library, not the installed Arduino SD library */
 #define FULL_REFRESH_INTERVAL 10
 #define BACK_PAGE_STACK_SIZE 20
 #define MAX_CHAPTERS 64
+#define MAX_CHAPTERS 64
 #define FLASH_STATE_MAGIC 0x4D4B5354UL // "MKST"
 #define FLASH_STATE_VERSION 1
 
