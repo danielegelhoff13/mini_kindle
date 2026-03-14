@@ -45,6 +45,9 @@ rp2040 package's SD library, not the installed Arduino SD library */
 #define FLASH_STATE_MAGIC 0x4D4B5354UL // "MKST"
 #define FLASH_STATE_VERSION 1
 
+/**
+ * Types
+ */
 typedef struct __attribute__((packed)) {
   uint32_t magic;
   uint8_t version;
@@ -54,9 +57,6 @@ typedef struct __attribute__((packed)) {
   uint32_t back_page_stack[BACK_PAGE_STACK_SIZE];
 } PersistedPageState;
 
-const int FLASH_STATE_ADDR = 0;
-const int FLASH_STATE_SIZE = sizeof(PersistedPageState);
-
 typedef enum {
   SLEEP = 0,
   READING = 1,
@@ -64,7 +64,7 @@ typedef enum {
 } STATE;
 
 /**
-* Global variables
+* Globals
 */
 uint32_t next_page;
 uint32_t cur_page;
@@ -80,6 +80,9 @@ uint32_t chapter_page_offsets[MAX_CHAPTERS];
 uint8_t chapter_count = 0;
 uint8_t current_chapter_index = 0;
 uint8_t chapter_menu_index = 0;
+
+const int FLASH_STATE_ADDR = 0;
+const int FLASH_STATE_SIZE = sizeof(PersistedPageState);
 
 // Forward declaration for embedded text used by chapter indexing helpers.
 extern const char book_text[];
@@ -254,6 +257,15 @@ bool popBackPageOffset(uint32_t* offset)
 }
 
 const char book_text[] = R"123456789(
+
+
+
+            THE FELLOWSHIP OF THE RING
+            
+  being the first part of The Lord of the Rings
+
+
+<<PAGE BREAK>>
 Three Rings for the Elven-kings under the sky,
 
     Seven for the Dwarf-lords in their
@@ -274,15 +286,6 @@ One Ring to bring them all
     and in the darkness bind them
 
 In the Land of Mordor where the Shadows lie.
-
-<<PAGE BREAK>>
-
-
-
-            THE FELLOWSHIP OF THE RING
-            
-  being the first part of The Lord of the Rings
-
 
 <<PAGE BREAK>>
 
@@ -24251,6 +24254,10 @@ void setup() {
 
 }
 
+/* If enter MENU, then exit MENU on same chapter, keep track of the user's page */
+uint32_t cur_page_persisted = 0;
+uint32_t cur_chapter_persisted = 0;
+
 void loop() {
   switch (state) {
 
@@ -24289,6 +24296,8 @@ void loop() {
       } 
       
       else if (digitalRead(MENU_PIN) == LOW) {
+        cur_page_persisted = cur_page;
+        cur_chapter_persisted = current_chapter_index;
         chapter_menu_index = current_chapter_index;
         back_page_count = 0;
         readEmbeddedPage(chapter_page_offsets[chapter_menu_index]);
@@ -24316,7 +24325,7 @@ void loop() {
         if (chapter_menu_index + 1 < chapter_count) {
           chapter_menu_index++;
           readEmbeddedPage(chapter_page_offsets[chapter_menu_index]);
-          drawPage(true);
+          drawPage(false);
         }
         delay(800);
       }
@@ -24325,13 +24334,18 @@ void loop() {
         if (chapter_menu_index > 0) {
           chapter_menu_index--;
           readEmbeddedPage(chapter_page_offsets[chapter_menu_index]);
-          drawPage(true);
+          drawPage(false);
         }
         delay(800);
       }
 
       else if (digitalRead(MENU_PIN) == LOW) {
+        if (cur_chapter_persisted == current_chapter_index) {
+          // do not draw the chapter start, draw the user's persisted page
+          readEmbeddedPage(cur_page_persisted);
+        }
         state = READING;
+        drawPage(true);
         delay(800);
       }
 
